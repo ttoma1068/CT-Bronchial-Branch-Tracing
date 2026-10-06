@@ -1,0 +1,9 @@
+{
+  "title": "CT-based Bronchial Branch Tracing (BBT)",
+  "description": "Research workflow for CT-derived airway segmentation, clinician-reviewed route planning, virtual bronchoscopy and bronchial branch tracing using 3D Slicer and open-source components.",
+  "creators": [{"name": "Toma, Tudor"}],
+  "license": "Apache-2.0",
+  "keywords": ["bronchoscopy", "virtual bronchoscopy", "bronchial branch tracing", "airway segmentation", "computed tomography", "3D Slicer", "interventional pulmonology"],
+  "upload_type": "software",
+  "access_right": "open"
+}
