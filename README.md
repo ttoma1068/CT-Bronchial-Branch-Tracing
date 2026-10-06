@@ -37,16 +37,16 @@ The workflow must not invent distal airways, silently bridge segmentation gaps, 
 
 ## Scripts expected
 
-- `01_BBT_CT_Series_Selector.py`
-- `02_BBT_Make_3D_Visible.py`
-- `03_BBT_Continuous_Smooth_Route.py`
-- `04_BBT_Virtual_Bronchoscopy.py`
+- `scripts/01_BBT_CT_Series_Selector_v1_0.py`
+- `scripts/02_BBT_Make_3D_Visible.py`
+- `scripts/03_BBT_Continuous_Smooth_Route_v4_0.py`
+- `scripts/04_BBT_Virtual_Bronch_v7_0.py`
 
-**Before public release:** insert the exact tested source files. This package deliberately does not reconstruct missing code.
+The route script can create clinician-authorised geometric bridges across disconnected segmentation components. Every such bridge is stored separately as `Airway_INTERPOLATED` and is **not CT-derived anatomy**. A route that crosses an interpolated segment must be treated as containing explicit uncertainty and checked against the source CT. Interpolation must never be interpreted as evidence that a bronchus exists.
 
 ## Reproduction
 
-The reproduction checklist will be added under `docs/` with the definitive release.
+See the reproduction and safety documentation under `docs/`. The source CT remains authoritative at every review step.
 
 ## Citation
 
