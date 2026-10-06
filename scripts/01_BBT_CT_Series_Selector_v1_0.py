@@ -1,0 +1,407 @@
+# ============================================================
+# BBT CT SERIES SELECTOR v1.0
+# Bronchial Branch Tracing workflow
+#
+# Run AFTER importing all CT series into 3D Slicer.
+#
+# Purpose:
+#   - Find CT scalar volumes loaded in Slicer
+#   - Report voxel spacing, dimensions and DICOM metadata
+#   - Identify reconstruction kernel where available
+#   - Rank candidate series for airway segmentation
+#
+# IMPORTANT:
+#   The ranking is a screening aid, not an anatomical decision.
+#   Inspect the top-ranked series visually before segmentation.
+# ============================================================
+
+import slicer
+import vtk
+import math
+from collections import defaultdict
+
+print("\n" + "=" * 90)
+print("BBT CT SERIES SELECTOR v1.0")
+print("=" * 90)
+
+
+# ------------------------------------------------------------
+# Helper functions
+# ------------------------------------------------------------
+
+def safe_float(value):
+    try:
+        return float(value)
+    except:
+        return None
+
+
+def get_dicom_value(instance_uid, tag):
+    """Read a DICOM tag from Slicer's DICOM database."""
+    if not instance_uid:
+        return ""
+    try:
+        value = slicer.dicomDatabase.instanceValue(instance_uid, tag)
+        return value.strip() if value else ""
+    except:
+        return ""
+
+
+def first_instance_uid(volume):
+    """
+    Get one source DICOM instance UID associated with the volume.
+    """
+    try:
+        uids = volume.GetAttribute("DICOM.instanceUIDs")
+        if uids:
+            uid_list = uids.split()
+            if uid_list:
+                return uid_list[0]
+    except:
+        pass
+    return None
+
+
+def classify_kernel(kernel):
+    """
+    Very approximate kernel classification.
+    Manufacturer naming varies substantially.
+    """
+    if not kernel:
+        return "Unknown"
+
+    k = kernel.upper()
+
+    sharp_terms = [
+        "LUNG", "SHARP", "BONE",
+        "B60", "B70", "B80",
+        "I70", "I80",
+        "FC50", "FC51", "FC52",
+        "FC55", "FC56",
+        "YA", "YD"
+    ]
+
+    smooth_terms = [
+        "SOFT", "STANDARD", "STD",
+        "B20", "B30", "B31", "B40",
+        "I20", "I30", "I31", "I40",
+        "FC08", "FC13", "FC17",
+        "FC18"
+    ]
+
+    if any(term in k for term in sharp_terms):
+        return "Sharp/Lung"
+
+    if any(term in k for term in smooth_terms):
+        return "Standard/Soft"
+
+    return "Unclassified"
+
+
+def orientation_from_matrix(volume):
+    """
+    Gives a rough acquisition orientation from the slice normal.
+    We favour native axial acquisitions over derived reformats.
+    """
+    matrix = vtk.vtkMatrix4x4()
+    volume.GetIJKToRASDirectionMatrix(matrix)
+
+    # K axis = slice direction
+    x = abs(matrix.GetElement(0, 2))
+    y = abs(matrix.GetElement(1, 2))
+    z = abs(matrix.GetElement(2, 2))
+
+    if z >= x and z >= y:
+        return "Axial"
+    elif y >= x and y >= z:
+        return "Coronal"
+    else:
+        return "Sagittal"
+
+
+# ------------------------------------------------------------
+# Scoring
+# ------------------------------------------------------------
+
+def score_series(info):
+
+    score = 0.0
+    reasons = []
+
+    sx, sy, sz = info["spacing"]
+
+    # ---- Slice thickness / Z spacing ----
+    if sz <= 0.625:
+        score += 40
+        reasons.append("excellent thin slices")
+    elif sz <= 0.8:
+        score += 37
+        reasons.append("very thin slices")
+    elif sz <= 1.0:
+        score += 34
+        reasons.append("≤1 mm slices")
+    elif sz <= 1.25:
+        score += 25
+        reasons.append("acceptable slice thickness")
+    elif sz <= 2.0:
+        score += 12
+        reasons.append("moderately thick slices")
+    else:
+        score -= 20
+        reasons.append("thick slices")
+
+    # ---- In-plane resolution ----
+    pixel = max(sx, sy)
+
+    if pixel <= 0.6:
+        score += 20
+        reasons.append("excellent in-plane resolution")
+    elif pixel <= 0.8:
+        score += 16
+        reasons.append("good in-plane resolution")
+    elif pixel <= 1.0:
+        score += 10
+    else:
+        score -= 5
+        reasons.append("coarse in-plane resolution")
+
+    # ---- Number of slices ----
+    nz = info["dimensions"][2]
+
+    if nz >= 400:
+        score += 12
+    elif nz >= 250:
+        score += 8
+    elif nz >= 150:
+        score += 3
+    else:
+        score -= 8
+        reasons.append("few slices")
+
+    # ---- Kernel ----
+    kernel_class = info["kernel_class"]
+
+    if kernel_class == "Sharp/Lung":
+        score += 15
+        reasons.append("lung/sharp kernel")
+    elif kernel_class == "Standard/Soft":
+        score += 5
+        reasons.append("standard/soft kernel")
+    else:
+        reasons.append("kernel uncertain")
+
+    # ---- Orientation ----
+    if info["orientation"] == "Axial":
+        score += 8
+        reasons.append("native axial-like geometry")
+    else:
+        score -= 5
+        reasons.append("possible reformatted series")
+
+    # ---- Derived images ----
+    image_type = info["image_type"].upper()
+
+    if "DERIVED" in image_type:
+        score -= 15
+        reasons.append("derived image")
+
+    # ---- Localizer/scout ----
+    name_upper = info["name"].upper()
+
+    bad_words = [
+        "SCOUT",
+        "LOCALIZER",
+        "TOPOGRAM",
+        "SURVIEW",
+        "MIP",
+        "MINIP"
+    ]
+
+    if any(word in name_upper for word in bad_words):
+        score -= 50
+        reasons.append("not suitable primary CT volume")
+
+    # ---- Isotropic-ish voxels bonus ----
+    ratio = max(sx, sy, sz) / max(min(sx, sy, sz), 0.0001)
+
+    if ratio <= 1.5:
+        score += 5
+        reasons.append("near-isotropic voxels")
+
+    return score, reasons
+
+
+# ------------------------------------------------------------
+# Collect scalar volumes
+# ------------------------------------------------------------
+
+volumes = slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+
+results = []
+
+for volume in volumes:
+
+    image = volume.GetImageData()
+
+    if image is None:
+        continue
+
+    dims = image.GetDimensions()
+
+    # Ignore tiny/non-CT volumes
+    if dims[0] < 100 or dims[1] < 100 or dims[2] < 10:
+        continue
+
+    spacing = volume.GetSpacing()
+
+    uid = first_instance_uid(volume)
+
+    # DICOM tags
+    # 0008,103E = Series Description
+    # 0018,1210 = Convolution Kernel
+    # 0018,0050 = Slice Thickness
+    # 0008,0008 = Image Type
+    # 0008,0070 = Manufacturer
+    # 0008,1090 = Manufacturer Model Name
+    # 0018,9315 = Reconstruction Algorithm
+
+    series_description = get_dicom_value(uid, "0008,103E")
+    kernel = get_dicom_value(uid, "0018,1210")
+    slice_thickness = get_dicom_value(uid, "0018,0050")
+    image_type = get_dicom_value(uid, "0008,0008")
+    manufacturer = get_dicom_value(uid, "0008,0070")
+    model = get_dicom_value(uid, "0008,1090")
+    recon_algorithm = get_dicom_value(uid, "0018,9315")
+
+    orientation = orientation_from_matrix(volume)
+
+    info = {
+        "node": volume,
+        "name": volume.GetName(),
+        "series_description": series_description,
+        "spacing": spacing,
+        "dimensions": dims,
+        "slice_thickness": slice_thickness,
+        "kernel": kernel,
+        "kernel_class": classify_kernel(kernel),
+        "orientation": orientation,
+        "image_type": image_type,
+        "manufacturer": manufacturer,
+        "model": model,
+        "recon_algorithm": recon_algorithm,
+    }
+
+    score, reasons = score_series(info)
+
+    info["score"] = score
+    info["reasons"] = reasons
+
+    results.append(info)
+
+
+# ------------------------------------------------------------
+# Sort
+# ------------------------------------------------------------
+
+results.sort(key=lambda x: x["score"], reverse=True)
+
+
+# ------------------------------------------------------------
+# Print report
+# ------------------------------------------------------------
+
+if not results:
+
+    print("\nNo suitable CT scalar volumes found.")
+    print("Import the patient's CT series first.")
+
+else:
+
+    print(f"\nFound {len(results)} candidate CT volume(s).\n")
+
+    for rank, info in enumerate(results, start=1):
+
+        sx, sy, sz = info["spacing"]
+        nx, ny, nz = info["dimensions"]
+
+        print("-" * 90)
+
+        if rank == 1:
+            print(f"RANK {rank}   <<< CURRENT BEST CANDIDATE >>>")
+        else:
+            print(f"RANK {rank}")
+
+        print(f"Score:              {info['score']:.1f}")
+        print(f"Slicer node:        {info['name']}")
+
+        if info["series_description"]:
+            print(f"Series description: {info['series_description']}")
+
+        print(
+            f"Voxel spacing:      "
+            f"{sx:.3f} x {sy:.3f} x {sz:.3f} mm"
+        )
+
+        print(
+            f"Dimensions:         "
+            f"{nx} x {ny} x {nz}"
+        )
+
+        print(f"Orientation:        {info['orientation']}")
+
+        if info["slice_thickness"]:
+            print(f"DICOM thickness:    {info['slice_thickness']} mm")
+
+        if info["kernel"]:
+            print(f"Kernel:             {info['kernel']}")
+
+        print(f"Kernel class:       {info['kernel_class']}")
+
+        if info["recon_algorithm"]:
+            print(f"Recon algorithm:    {info['recon_algorithm']}")
+
+        if info["manufacturer"]:
+            print(f"Scanner:            {info['manufacturer']} {info['model']}")
+
+        if info["image_type"]:
+            print(f"Image type:         {info['image_type']}")
+
+        print("Assessment:         " + "; ".join(info["reasons"]))
+
+    print("\n" + "=" * 90)
+
+    best = results[0]
+
+    print("RECOMMENDED FIRST SERIES TO TEST")
+    print("=" * 90)
+
+    print(f"\n{best['name']}")
+    print(f"Score: {best['score']:.1f}")
+
+    sx, sy, sz = best["spacing"]
+
+    print(
+        f"Voxel size: "
+        f"{sx:.3f} x {sy:.3f} x {sz:.3f} mm"
+    )
+
+    if best["kernel"]:
+        print(f"Kernel: {best['kernel']}")
+
+    print("\nIMPORTANT:")
+    print(
+        "This ranking identifies the technically strongest candidate. "
+        "It does NOT prove that it will give the most distal airway segmentation."
+    )
+
+    print(
+        "\nVisually inspect the top 2-3 series and, when appropriate, "
+        "run the same airway segmentation on them."
+    )
+
+    print(
+        "\nFor BBT, retain the segmentation that gives the greatest "
+        "CT-supported distal airway continuity without leakage or invented anatomy."
+    )
+
+    print("\n" + "=" * 90)
