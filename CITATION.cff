@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use or adapt this project, please cite the specific version used."
+title: "CT-based Bronchial Branch Tracing (BBT)"
+type: software
+authors:
+  - family-names: "Toma"
+    given-names: "Tudor"
+version: "1.0.0"
+date-released: "2026-10-06"
+license: "Apache-2.0"
+abstract: "Research workflow for CT-derived airway segmentation, clinician-reviewed route planning, virtual bronchoscopy and bronchial branch tracing using 3D Slicer and open-source components."
+repository-code: "https://github.com/ttoma1068/CT-Bronchial-Branch-Tracing"
+keywords:
+  - bronchoscopy
+  - virtual bronchoscopy
+  - bronchial branch tracing
+  - computed tomography
+  - airway segmentation
+  - 3D Slicer
+  - interventional pulmonology
