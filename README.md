@@ -1,5 +1,7 @@
 # CT-based Bronchial Branch Tracing (BBT)
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23190857.svg)](https://doi.org/10.5281/zenodo.23190857)
+
 **Research prototype for CT-derived virtual bronchoscopy and bronchial branch tracing**
 
 Version 1.0.0 | Initial public repository package | 2026
@@ -49,6 +51,10 @@ The route script can create clinician-authorised geometric bridges across discon
 See the reproduction and safety documentation under `docs/`. The source CT remains authoritative at every review step.
 
 ## Citation
+
+The archived v1.0.0 release has the persistent DOI **10.5281/zenodo.23190857**.
+
+Toma T. *CT-based Bronchial Branch Tracing (BBT): CT-derived virtual bronchoscopy and bronchial branch tracing workflow*. Version 1.0.0. 2026. Zenodo. https://doi.org/10.5281/zenodo.23190857
 
 If you use, reproduce or adapt BBT in research, teaching, software development or publication, please cite the specific version used. See `CITATION.cff` and `CITATION.md`.
 
